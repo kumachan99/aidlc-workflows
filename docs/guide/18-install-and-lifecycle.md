@@ -1846,63 +1846,99 @@ harness in the project first.
 
 ### 1. Keep your records
 
+If the project is pinned (it has a `.aidlc-version` file), unpin it first,
+while AI-DLC is still installed: `aidlc config --unpin`, or in a copied project
+`bun <harness folder>/tools/aidlc.ts config --unpin`. That also clears the
+machine's record of the pin, which deleting the file does not.
+
 `aidlc/` holds your work: each intent's state, artifacts and audit trail, and
-the space's memory and knowledge. Archive it before you delete it:
+the space's memory and knowledge. Archive it before you delete it. In a POSIX
+shell:
 
 ```bash
 tar -czf aidlc-records.tar.gz aidlc && rm -rf aidlc
 ```
 
+In PowerShell (Windows 10 and later include `tar`):
+
+```powershell
+tar -czf aidlc-records.tar.gz aidlc; if ($?) { Remove-Item -Recurse -Force aidlc }
+```
+
 Delete these too if they are there: `aidlc.settings.json`,
-`aidlc.settings.local.json`, the `.aidlc-version` pin, and the
-`aidlc.settings.local.json` line config may have added to `.git/info/exclude`.
+`aidlc.settings.local.json`, and the `aidlc.settings.local.json` line config
+may have added to `.git/info/exclude`.
 
 ### 2. Delete AI-DLC's own files
 
 `aidlc config` records what it installed in
 `<harness folder>/tools/data/aidlc-manifest.json`: every file with its SHA-256,
 and the shared files it added its part to. This script reads that record and
-deletes only the files whose content still matches it. A file you changed is
-kept and listed. Save it as `remove-aidlc.cjs` outside the project:
+deletes only the files it lists whose content still matches, counting a file
+whose only difference is its line endings (a CRLF checkout) as unchanged. It
+keeps and lists a file you changed, never deletes a file the record does not
+list apart from the few AI-DLC generates while it runs, and removes only the
+folders it emptied. Save it as `remove-aidlc.cjs` in the folder that holds the
+project, next to the project folder rather than inside it:
 
 ```js
-// Usage: node remove-aidlc.cjs <harness folder>   (or: bun remove-aidlc.cjs <harness folder>)
+// Usage, from the project root: node <path to>/remove-aidlc.cjs <harness folder>   (Bun works too)
 const fs = require("node:fs");
+const path = require("node:path");
 const { createHash } = require("node:crypto");
 const dir = process.argv[2];
-const manifest = JSON.parse(fs.readFileSync(`${dir}/tools/data/aidlc-manifest.json`, "utf8"));
+const manifestPath = path.join(dir, "tools", "data", "aidlc-manifest.json");
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+if (manifest.shippedOnly !== true) {
+  console.log(`${manifestPath} predates the shipped-files-only record. Refresh it first with aidlc config --harness <harness>, then run this again.`);
+  process.exit(1);
+}
+const sha = (bytes) => "sha256:" + createHash("sha256").update(bytes).digest("hex");
+// A file whose only difference is its line endings (a CRLF checkout) is unchanged.
+const unchanged = (file, hash) => {
+  const bytes = fs.readFileSync(file);
+  const lf = bytes.toString("latin1").replaceAll("\r\n", "\n");
+  return [bytes, Buffer.from(lf, "latin1"), Buffer.from(lf.replaceAll("\n", "\r\n"), "latin1")].some((form) => sha(form) === hash);
+};
 const roots = manifest.rootContributions ?? {};
 const shared = new Set([...Object.keys(manifest.entries ?? {}), ...Object.keys(roots)]);
 const owned = Object.entries(manifest.files).filter(([file]) => !shared.has(file));
 for (const [file, part] of Object.entries(roots)) if (part.policy === "whole-file") owned.push([file, part.hash]);
+const removed = [];
 for (const [file, hash] of owned) {
   if (!fs.existsSync(file)) continue;
-  const now = "sha256:" + createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-  if (now === hash) fs.rmSync(file);
+  if (unchanged(file, hash)) { fs.rmSync(file); removed.push(file); }
   else console.log(`kept, changed since install: ${file}`);
 }
-fs.rmSync(`${dir}/tools/data`, { recursive: true, force: true });
+// Files AI-DLC generates while it runs, which the record does not list.
+for (const file of ["harness.json", "scope-grid.json", "stage-graph.json"].map((name) => path.join(dir, "tools", "data", name))
+  .concat(path.join(dir, "steering", "aidlc-active-memory.md"), manifestPath)) {
+  if (fs.existsSync(file)) { fs.rmSync(file); removed.push(file); }
+}
+// Remove only the folders this emptied, never one that holds anything else.
+for (const file of removed) {
+  for (let folder = path.dirname(file); folder !== "." && folder !== path.dirname(folder); folder = path.dirname(folder)) {
+    try { fs.rmdirSync(folder); } catch { break; }
+  }
+}
 for (const file of shared) if (fs.existsSync(file)) console.log(`edit by hand: ${file}`);
 ```
 
 Run it from the project root with Node.js or Bun, once for each harness folder
-in the project:
+in the project. The same commands work in a POSIX shell and in PowerShell:
 
-| Harness | Run | Folders to tidy afterwards |
-|---------|-----|----------------------------|
-| Claude Code | `node remove-aidlc.cjs .claude` | `.claude` |
-| Kiro CLI, Kiro IDE | `node remove-aidlc.cjs .kiro` | `.kiro` |
-| Codex CLI | `node remove-aidlc.cjs .codex` | `.codex`, `.agents` |
-| Cursor | `node remove-aidlc.cjs .cursor` | `.cursor` |
-| OpenCode | `node remove-aidlc.cjs .aidlc` | `.aidlc`, `.opencode` |
-| GitHub Copilot | `node remove-aidlc.cjs .aidlc` | `.aidlc`, `.github` |
+| Harness | Run |
+|---------|-----|
+| Claude Code | `node ../remove-aidlc.cjs .claude` |
+| Kiro CLI, Kiro IDE | `node ../remove-aidlc.cjs .kiro` |
+| Codex CLI | `node ../remove-aidlc.cjs .codex` |
+| Cursor | `node ../remove-aidlc.cjs .cursor` |
+| OpenCode, GitHub Copilot | `node ../remove-aidlc.cjs .aidlc` |
 
-Then tidy the folders in the last column. Files named `aidlc-*` that are still
-there are ones AI-DLC writes while it runs, such as Kiro IDE's
-`aidlc-active-memory.md` steering file; delete them. Then delete the folders
-that are now empty, for example `find .claude -type d -empty -delete`. Review
-any file the script kept: it is an AI-DLC file you edited, so keep it only if
-you still want your edit.
+If it says the record predates the shipped-files-only record, an earlier
+release wrote it: refresh with `aidlc config --harness <name>` first, then run
+the script again. Review any file it kept: it is an AI-DLC file you edited, so
+keep it only if you still want your edit.
 
 ### 3. Take AI-DLC's part out of shared files
 
@@ -1911,13 +1947,14 @@ project from before AI-DLC was added, restoring them from that commit is the
 quickest way, for example
 `git checkout <commit> -- .gitignore AGENTS.md .claude/settings.json`. That also
 undoes any change you made to them since, so check `git diff --cached` before
-you commit. Otherwise remove AI-DLC's part by hand:
+you commit. Otherwise remove AI-DLC's part by hand. Remove a value only while it
+still holds what AI-DLC wrote; a value your team changed is yours, so keep it:
 
 | File | Remove |
 |------|--------|
 | `.gitignore` | The lines from `# BEGIN AI-DLC:gitignore` to `# END AI-DLC:gitignore`, and the blank line above them. Several harnesses share this one block. |
 | `AGENTS.md` | The lines from `<!-- BEGIN AI-DLC:agents -->` to `<!-- END AI-DLC:agents -->`, and the blank line above them. |
-| `.claude/settings.json` | `companyAnnouncements`. `statusLine` when its command runs `aidlc`. Every hook group whose command runs `aidlc` (`aidlc engine hook ...`, or `bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook ...` in a copied project). The `permissions.allow` entries that name `aidlc`, and `Edit(/**)`, `Task` and `WebSearch` unless you added them. `env` keys that start with `AIDLC_` or `AWS_AIDLC_`, and any provider keys you chose in `aidlc config providers`. |
+| `.claude/settings.json` | `companyAnnouncements`, unless your team set its own. `statusLine` when its command runs `aidlc`. Every hook group whose command runs `aidlc` (`aidlc engine hook ...`, or `bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook ...` in a copied project). The `permissions.allow` entries that name `aidlc`, and `Edit(/**)`, `Task` and `WebSearch` unless you added them. `env` keys that start with `AIDLC_` or `AWS_AIDLC_`, and any provider keys you chose in `aidlc config providers`. |
 | `.claude/settings.local.json` | A `statusLine` whose command runs `aidlc`, if a refresh moved AI-DLC's status line there. |
 | `.mcp.json` (Claude Code), `.kiro/settings/mcp.json` (Kiro CLI) | The MCP servers AI-DLC ships (`context7`, `aws-mcp`, `aws-pricing`, `aws-iac`, `aws-serverless`), unless you set one up yourself. Kiro CLI gets them by default, turned off; Claude Code gets them only if you turned them on with `--mcp`. |
 | `.codex/config.toml` | `developer_instructions`, `sandbox_mode`, `suppress_unstable_features_warning` and `tool_output_token_limit`; AI-DLC's keys in `[shell_environment_policy]` (`set`, holding `AIDLC_RULES_DIR`), `[sandbox_workspace_write]` (`network_access`), `[agents]` (`max_depth`), `[features]` (`default_mode_request_user_input`), `[tools]` (`experimental_request_user_input`) and `[tui]` (`status_line`); the `#` comments directly above them; and any of those tables left empty. Keep keys you set yourself, also inside those tables. |
@@ -1933,8 +1970,16 @@ default); remove the project's entries there if you want Codex to forget them.
 ### 4. Check
 
 `git status` shows AI-DLC's files deleted and your shared files back to what they
-held before. `grep -n "AI-DLC\|aidlc" .gitignore AGENTS.md`, and the same search
-in each shared file from step 3, should find nothing of AI-DLC's left.
+held before. Searching each shared file from step 3 for `AI-DLC` and `aidlc`
+should find nothing of AI-DLC's left:
+
+```bash
+grep -n "AI-DLC\|aidlc" .gitignore AGENTS.md
+```
+
+```powershell
+Select-String -Path .gitignore, AGENTS.md -Pattern 'AI-DLC|aidlc'
+```
 
 A project copied from `aidlc-copy-runtime-X.Y.Z.tar.gz` gets the manifest when
 its setup command runs (see [Copy Channel](#copy-channel)). If that command never

@@ -166,6 +166,17 @@ Attempt to execute the build and test commands documented in the instruction fil
      target: `Met`, `Not Met`, or `Unverified`. `Pending` is allowed only while
      Step 8 is being prepared; no `Pending` verdict may remain when Step 9
      exits.
+   - For a target whose source requires behavior in a browser (a done
+     condition or acceptance criterion that says the person does something in
+     a browser), the Evidence cell names where the check ran: Node, a DOM
+     emulator (jsdom, Happy DOM), or a real browser engine (for example
+     Chromium driven by Playwright). Only a run in a real browser engine makes
+     that target `Met`. Tests in Node or a DOM emulator, including an
+     assembled-bundle journey, are integration evidence: they cannot show
+     native browser behavior such as calling `fetch` without its `window`
+     receiver. With no real-browser run, including when a browser cannot
+     launch here, the target is `Unverified` unless the person waives
+     real-browser evidence for it; record the waiver in the Evidence cell.
    - `## Loop-Back Log` (only when the failure ladder's rung 3 or 4 fires a
      loop-back): one `### Loop-back N — <ISO timestamp>` entry per attempt,
      carrying Diagnosis / Root-cause stage / Planned fix / Estimated impact. This section
